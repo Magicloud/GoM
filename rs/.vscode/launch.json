@@ -1,0 +1,64 @@
+{
+  // Use IntelliSense to learn about possible attributes.
+  // Hover to view descriptions of existing attributes.
+  // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug unit tests in library 'procfs'",
+      "cargo": {
+        "args": [
+          "test",
+          "--no-run",
+          "--lib",
+          "--package=gom"
+        ],
+        "filter": {
+          "name": "procfs",
+          "kind": "lib"
+        }
+      },
+      "args": [],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug executable 'gom'",
+      "cargo": {
+        "args": [
+          "build",
+          "--bin=gom",
+          "--package=gom"
+        ],
+        "filter": {
+          "name": "gom",
+          "kind": "bin"
+        }
+      },
+      "args": [],
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug unit tests in executable 'gom'",
+      "cargo": {
+        "args": [
+          "test",
+          "--no-run",
+          "--bin=gom",
+          "--package=gom"
+        ],
+        "filter": {
+          "name": "gom",
+          "kind": "bin"
+        }
+      },
+      "args": [],
+      "cwd": "${workspaceFolder}"
+    }
+  ]
+}

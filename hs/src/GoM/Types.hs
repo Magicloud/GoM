@@ -1,17 +1,16 @@
-{-# LANGUAGE LambdaCase           #-}
+{-# LANGUAGE TypeSynonymInstances #-}
 module GoM.Types where
 
-import Debug.Trace
-import Data.Bits
-import Data.List
-import Data.Maybe
-import Data.Word
-import GoM.Helper
-import System.Exit
-import System.Posix.Signals
-import System.Posix.Types
-import Text.Read
-import Text.Read.Lex
+import           Data.Bits
+import qualified Data.ByteString.Char8 as C8
+import           Data.Word
+import           GoM.Helper
+import           System.Exit
+import           System.Posix.Signals
+import           System.Posix.Types
+
+class ReadC8 a where
+  readC8 :: C8.ByteString -> Maybe a
 
 data ProcState = PSRunning
                | PSSleeping
@@ -25,41 +24,41 @@ data ProcState = PSRunning
                | PSWaking
                | PSParked
                deriving (Show)
-instance Read ProcState where
-  readPrec = get >>= return . \case
-    'R' -> PSRunning
-    'S' -> PSSleeping
-    'D' -> PSWaiting
-    'Z' -> PSZombie
-    'T' -> PSStopped
-    't' -> PSTracing
-    -- 'W' -> PSPaging
-    'X' -> PSDead
-    'x' -> PSDead
-    'K' -> PSWakekill
-    'W' -> PSWaking
-    'P' -> PSParked
-    _ -> undefined
+instance ReadC8 ProcState where
+  readC8 s = lookup s mapping
+    where
+      mapping :: [(C8.ByteString, ProcState)]
+      mapping = [ (C8.singleton 'R', PSRunning)
+                , (C8.singleton 'S', PSSleeping)
+                , (C8.singleton 'D', PSWaiting)
+                , (C8.singleton 'Z', PSZombie)
+                , (C8.singleton 'T', PSStopped)
+                , (C8.singleton 't', PSTracing)
+--                , (C8.singleton 'W', PSPaging)
+                , (C8.singleton 'X', PSDead)
+                , (C8.singleton 'x', PSDead)
+                , (C8.singleton 'K', PSWakekill)
+                , (C8.singleton 'W', PSWaking)
+                , (C8.singleton 'P', PSParked)]
 
 data DeviceNumber = DN { dnMajor :: Word8
                        , dnMinor :: Word32 }
                   deriving (Show)
-instance Read DeviceNumber where
-  readPrec = colon +++ number
-    where
-      colon = do
-        Number major <- lexP
-        Symbol ":" <- lexP
-        Number minor <- lexP
-        return $ DN (fromIntegral $ fromJust $ numberToInteger major) (fromIntegral $ fromJust $ numberToInteger minor)
-      number = do
-        Number n' <- lexP
-        let Just n = numberToInteger n'
-            major = shiftR n 8 .&. 255
+instance ReadC8 DeviceNumber where
+  readC8 s = do
+    (n, r) <- C8.readInteger s
+    if C8.empty == r
+      then do
+        let major = shiftR n 8 .&. 255
             minorL = n .&. 255
             minorH = shiftR n 19 .&. 8191
             minor = shiftL minorH 8 .|. minorL
         return $ DN (fromIntegral major) (fromIntegral minor)
+      else if C8.length r > 1 && C8.head r == ':'
+      then do
+        m <- readIntegerAll $ C8.tail r
+        return $ DN (fromIntegral n) (fromIntegral m)
+      else fail ""
 
 data ProcessFlag = PFIdle
                  | PFExiting
@@ -154,10 +153,11 @@ instance Enum ProcessFlag where
   toEnum 0x40000000 = PFFreezerSkip
   toEnum 0x80000000 = PFSuspendTask
   toEnum _ = undefined
-readProcessFlags :: String -> Maybe [ProcessFlag]
+readProcessFlags :: C8.ByteString -> Maybe [ProcessFlag]
 readProcessFlags flags = do
-  flags' <- readMaybe flags
-  return $ filter (\enum -> fromEnum enum .&. flags' == fromEnum enum) $ map (toEnum . shiftL 1) $ [1..27] ++ [29, 30, 31]
+  flags' <- readIntegerAll flags
+  return $ filter (\enum -> fromEnum enum .&. fromIntegral flags' == fromEnum enum) $
+    map (toEnum . shiftL 1) $ [1..27] ++ [29, 30, 31]
 
 data SchedPolicy = SPNormal
                  | SPFifo
@@ -189,12 +189,11 @@ data ExitStatus = ESExited ExitCode
                 | ESCoreDump
                 | ESStoppped Signal
                 | ESContinued
-                deriving (Show)
-instance Read ExitStatus where
-  readPrec = do
-    Number i' <- lexP
-    let i = fromIntegral $ fromJust $ numberToInteger i'
-        termsig = i .&. 0x7F
+                deriving (Eq, Show)
+instance ReadC8 ExitStatus where
+  readC8 s = do
+    i <- readIntegerAll s
+    let termsig = i .&. 0x7F
         exited = termsig == 0
         exitstatus = shiftR (i .&. 0xFF00) 8
         signaled = shiftR (termsig + 1) 1 > 0
@@ -202,21 +201,33 @@ instance Read ExitStatus where
         stopped = i .&. 0xFF == 0x7F
         stopsig = exitstatus
         continued = i == 0xFFFF
-    return $ if exited
-      then ESExited $ case exitstatus of
+    if exited
+      then return $ ESExited $ case exitstatus of
         0 -> ExitSuccess
-        j -> ExitFailure j
+        j -> ExitFailure $ fromIntegral j
       else if signaled
-      then ESSignaled $ fromIntegral termsig
+      then return $ ESSignaled $ fromIntegral termsig
       else if coredump
-      then ESCoreDump
+      then return ESCoreDump
       else if stopped
-      then ESStoppped $ fromIntegral stopsig
+      then return $ ESStoppped $ fromIntegral stopsig
       else if continued
-      then ESContinued
-      else undefined
+      then return ESContinued
+      else fail ""
     where
       coreflag = 0x80
+
+instance ReadC8 Int where
+  readC8 = fmap fromIntegral . readIntegerAll
+
+instance ReadC8 Signal where
+  readC8 = fmap fromIntegral . readIntegerAll
+
+instance ReadC8 Integer where
+  readC8 = readIntegerAll
+
+instance ReadC8 ProcessID where
+  readC8 = fmap fromIntegral . readIntegerAll
 
 type ProcessSessionID = CPid
 type ClockTicks = Integer
@@ -230,7 +241,7 @@ data Stat = Stat { statPid :: ProcessID
                  , statPgrp :: ProcessGroupID
                  , statSession :: ProcessSessionID
                  , statTtyNr :: DeviceNumber
-                 , statTpgid :: ProcessGroupID
+                 , statTpgid :: Maybe ProcessGroupID
                  , statFlags :: [ProcessFlag]
                  , statMinflt :: Integer
                  , statCminflt :: Integer
@@ -276,75 +287,68 @@ data Stat = Stat { statPid :: ProcessID
                  , statEnvEnd :: Maybe Address
                  , statExitCode :: Maybe ExitStatus }
           deriving (Show)
-instance Read Stat where
-  readPrec = do
-    String str <- lexP
-    EOF <- lexP
-    return $ fromJust $ parseStat str
-parseStat :: String -> Maybe Stat
-parseStat str = do
-  lp <- elemIndex '(' str
-  rp <- elemIndex ')' str
-  let pid' = take (lp - 1) str
-      comm' = drop (lp + 1) $ take rp str
-      fields = ["", ""] ++ splitOn (drop (rp + 1) str) ' '
-  pure Stat
-    <*> readMaybe pid'
-    <*> pure comm'
-    <*> readMaybe (fields !! 2)
-    <*> readMaybe (fields !! 3)
-    <*> readMaybe (fields !! 4)
-    <*> readMaybe (fields !! 5)
-    <*> readMaybe (fields !! 6)
-    <*> readMaybe (fields !! 7)
-    <*> readProcessFlags (fields !! 8)
-    <*> readMaybe (fields !! 9)
-    <*> readMaybe (fields !! 10)
-    <*> readMaybe (fields !! 11)
-    <*> readMaybe (fields !! 12)
-    <*> readMaybe (fields !! 13)
-    <*> readMaybe (fields !! 14)
-    <*> readMaybe (fields !! 15)
-    <*> readMaybe (fields !! 16)
-    <*> readMaybe (fields !! 17)
-    <*> readMaybe (fields !! 18)
-    <*> readMaybe (fields !! 19)
-    <*> pure ()
-    <*> readMaybe (fields !! 21)
-    <*> readMaybe (fields !! 22)
-    <*> readMaybe (fields !! 23)
-    <*> readMaybe (fields !! 24)
-    <*> rm (fields !! 25)
-    <*> rm (fields !! 26)
-    <*> rm (fields !! 27)
-    <*> rm (fields !! 28)
-    <*> rm (fields !! 29)
-    <*> pure ()
-    <*> pure ()
-    <*> pure ()
-    <*> pure ()
-    <*> rm (fields !! 34)
-    <*> pure ()
-    <*> pure ()
-    <*> readMaybe (fields !! 37)
-    <*> readMaybe (fields !! 38)
-    <*> readMaybe (fields !! 39)
-    <*> (toEnum <$> readMaybe (fields !! 40))
-    <*> readMaybe (fields !! 41)
-    <*> readMaybe (fields !! 42)
-    <*> readMaybe (fields !! 43)
-    <*> rm (fields !! 44)
-    <*> rm (fields !! 45)
-    <*> rm (fields !! 46)
-    <*> rm (fields !! 47)
-    <*> rm (fields !! 48)
-    <*> rm (fields !! 49)
-    <*> rm (fields !! 50)
-    <*> rm (fields !! 51)
-    where
-      rm :: (Read a) => String -> Maybe (Maybe a)
-      rm = \case
-        "0" -> Just Nothing
-        i -> case readMaybe i of
-          Nothing -> Nothing
-          Just i' -> Just $ Just i'
+instance ReadC8 Stat where
+  readC8 s = do
+    lp <- C8.elemIndex '(' s
+    rp <- C8.elemIndexEnd ')' s
+    let pid' = C8.take (lp - 1) s
+        comm' = C8.unpack $ C8.drop (lp + 1) $ C8.take rp s
+        fields = [C8.empty, C8.empty] ++ C8.split ' ' (C8.drop (rp + 1) s)
+    pure Stat
+      <*> readC8 pid'
+      <*> pure comm'
+      <*> readC8 (fields !! 2)
+      <*> readC8 (fields !! 3)
+      <*> readC8 (fields !! 4)
+      <*> readC8 (fields !! 5)
+      <*> readC8 (fields !! 6)
+      <*> fmap (nothingOnValue (-1)) (readC8 (fields !! 7))
+      <*> readProcessFlags (fields !! 8)
+      <*> readC8 (fields !! 9)
+      <*> readC8 (fields !! 10)
+      <*> readC8 (fields !! 11)
+      <*> readC8 (fields !! 12)
+      <*> readC8 (fields !! 13)
+      <*> readC8 (fields !! 14)
+      <*> readC8 (fields !! 15)
+      <*> readC8 (fields !! 16)
+      <*> readC8 (fields !! 17)
+      <*> readC8 (fields !! 18)
+      <*> readC8 (fields !! 19)
+      <*> pure ()
+      <*> readC8 (fields !! 21)
+      <*> readC8 (fields !! 22)
+      <*> readC8 (fields !! 23)
+      <*> readC8 (fields !! 24)
+      <*> fmap (nothingOnValue 0) (readC8 (fields !! 25))
+      <*> fmap (nothingOnValue 0) (readC8 (fields !! 26))
+      <*> fmap (nothingOnValue 0) (readC8 (fields !! 27))
+      <*> fmap (nothingOnValue 0) (readC8 (fields !! 28))
+      <*> fmap (nothingOnValue 0) (readC8 (fields !! 29))
+      <*> pure ()
+      <*> pure ()
+      <*> pure ()
+      <*> pure ()
+      <*> fmap (nothingOnValue 0) (readC8 (fields !! 34))
+      <*> pure ()
+      <*> pure ()
+      <*> readC8 (fields !! 37)
+      <*> readC8 (fields !! 38)
+      <*> readC8 (fields !! 39)
+      <*> (toEnum <$> readC8 (fields !! 40))
+      <*> readC8 (fields !! 41)
+      <*> readC8 (fields !! 42)
+      <*> readC8 (fields !! 43)
+      <*> fmap (nothingOnValue 0) (readC8 (fields !! 44))
+      <*> fmap (nothingOnValue 0) (readC8 (fields !! 45))
+      <*> fmap (nothingOnValue 0) (readC8 (fields !! 46))
+      <*> fmap (nothingOnValue 0) (readC8 (fields !! 47))
+      <*> fmap (nothingOnValue 0) (readC8 (fields !! 48))
+      <*> fmap (nothingOnValue 0) (readC8 (fields !! 49))
+      <*> fmap (nothingOnValue 0) (readC8 (fields !! 50))
+      <*> fmap (nothingOnValue (ESExited ExitSuccess)) (readC8 (fields !! 51))
+      where
+        nothingOnValue :: (Eq a) => a -> a -> Maybe a
+        nothingOnValue x y = if x == y
+          then Nothing
+          else Just y

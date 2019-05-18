@@ -293,7 +293,7 @@ instance ReadC8 Stat where
     rp <- C8.elemIndexEnd ')' s
     let pid' = C8.take (lp - 1) s
         comm' = C8.unpack $ C8.drop (lp + 1) $ C8.take rp s
-        fields = [C8.empty, C8.empty] ++ C8.split ' ' (C8.drop (rp + 1) s)
+        fields = [C8.empty, C8.empty] ++ C8.split ' ' (C8.drop (rp + 2) $ C8.init s)
     pure Stat
       <*> readC8 pid'
       <*> pure comm'

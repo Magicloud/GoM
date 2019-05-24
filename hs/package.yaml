@@ -26,6 +26,11 @@ dependencies:
 - notifySend
 - filepath
 - bytestring
+- sysconf
+- transformers
+- containers
+- ordered-containers
+- NoTrace
 
 library:
   source-dirs: src
@@ -38,3 +43,13 @@ executables:
     - -Wall
     dependencies:
     - GoM
+
+flags:
+  debug:
+    description: Enable debug
+    manual: True
+    default: False
+
+when:
+  - condition: flag(debug)
+    cpp-options:  -DDEBUG

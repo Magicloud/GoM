@@ -38,7 +38,11 @@ packages:
 # using the same syntax as the packages field.
 # (e.g., acme-missiles-0.3)
 extra-deps:
+- ordered-containers-0.2.1
+- NoTrace-0.3.0.4
 - github: Magicloud/notifySend
+  commit: HEAD
+- github: Magicloud/sysconf
   commit: HEAD
 
 # Override default flag values for local packages and extra-deps
